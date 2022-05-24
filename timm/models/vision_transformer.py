@@ -79,7 +79,7 @@ default_cfgs = {
         url='https://storage.googleapis.com/vit_models/augreg/'
             'B_32-i21k-300ep-lr_0.001-aug_light1-wd_0.1-do_0.0-sd_0.0--imagenet2012-steps_20k-lr_0.03-res_384.npz',
         input_size=(3, 384, 384), crop_pct=1.0),
-    'vit_base_patch16_224': _cfg(
+        'vit_base_patch16_224': _cfg(
         url='https://storage.googleapis.com/vit_models/augreg/'
             'B_16-i21k-300ep-lr_0.001-aug_medium1-wd_0.1-do_0.0-sd_0.0--imagenet2012-steps_20k-lr_0.01-res_224.npz'),
     'vit_base_patch16_384': _cfg(
@@ -208,7 +208,7 @@ class Attention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x
+        return x, attn
 
 
 class LayerScale(nn.Module):
@@ -225,7 +225,7 @@ class Block(nn.Module):
 
     def __init__(
             self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0., init_values=None,
-            drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+            drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, return_attn=False):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
@@ -237,11 +237,17 @@ class Block(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=int(dim * mlp_ratio), act_layer=act_layer, drop=drop)
         self.ls2 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.return_attn=return_attn
 
     def forward(self, x):
-        x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
+        #x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
+        intermediate, attn = self.attn(self.norm1(x))
+        x = x + self.drop_path1(self.ls1(intermediate))
         x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
-        return x
+        if self.return_attn:
+            return x, attn
+        else:
+            return x
 
 
 class ResPostBlock(nn.Module):
@@ -375,7 +381,8 @@ class VisionTransformer(nn.Module):
         self.blocks = nn.Sequential(*[
             block_fn(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, init_values=init_values,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer)
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer,
+                return_attn=True if i==(depth-1) else False)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim) if not use_fc_norm else nn.Identity()
 
@@ -436,9 +443,9 @@ class VisionTransformer(nn.Module):
         if self.grad_checkpointing and not torch.jit.is_scripting():
             x = checkpoint_seq(self.blocks, x)
         else:
-            x = self.blocks(x)
+            x, attn= self.blocks(x)
         x = self.norm(x)
-        return x
+        return x, attn
 
     def forward_head(self, x, pre_logits: bool = False):
         if self.global_pool:
@@ -447,9 +454,9 @@ class VisionTransformer(nn.Module):
         return x if pre_logits else self.head(x)
 
     def forward(self, x):
-        x = self.forward_features(x)
+        x, attn = self.forward_features(x)
         x = self.forward_head(x)
-        return x
+        return x, attn
 
 
 def init_weights_vit_timm(module: nn.Module, name: str = ''):

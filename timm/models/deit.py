@@ -111,9 +111,9 @@ class VisionTransformerDistilled(VisionTransformer):
         if self.grad_checkpointing and not torch.jit.is_scripting():
             x = checkpoint_seq(self.blocks, x)
         else:
-            x = self.blocks(x)
+            x, attn = self.blocks(x)
         x = self.norm(x)
-        return x
+        return x, attn
 
     def forward_head(self, x, pre_logits: bool = False) -> torch.Tensor:
         if pre_logits:
