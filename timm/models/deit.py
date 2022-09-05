@@ -68,13 +68,24 @@ class VisionTransformerDistilled(VisionTransformer):
         super().__init__(*args, **kwargs, weight_init='skip')
         assert self.global_pool in ('token',)
 
-        self.num_tokens = 2
-        self.dist_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
+        self.num_tokens = self.num_classes*2
+        if not self.multiclass:
+            self.dist_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim)) if self.num_tokens > 0 else None
+        else:
+            self.dist_token = nn.Parameter(torch.zeros(1, self.num_classes, int(self.embed_dim)))
+        #self.dist_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches + self.num_tokens, self.embed_dim))
-        self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if self.num_classes > 0 else nn.Identity()
+        #self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if self.num_classes > 0 else nn.Identity()
         self.distilled_training = False  # must set this True to train w/ distillation token
-
         self.init_weights(weight_init)
+
+        if not self.multiclass:
+            self.head = nn.Linear(int(self.embed_dim), self.num_classes) if self.num_classes > 0 else nn.Identity()
+            self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if self.num_classes > 0 else nn.Identity()
+        else:
+            #self.head = nn.Linear(int(self.embed_dim), self.num_classes)
+            self.head = nn.ModuleList([nn.Linear(int(self.embed_dim), 1) for _ in range(self.num_classes)])
+            self.head_dist = nn.ModuleList([nn.Linear(int(self.embed_dim), 1) for _ in range(self.num_classes)])
 
     def init_weights(self, mode=''):
         trunc_normal_(self.dist_token, std=.02)
@@ -117,13 +128,22 @@ class VisionTransformerDistilled(VisionTransformer):
 
     def forward_head(self, x, pre_logits: bool = False) -> torch.Tensor:
         if pre_logits:
-            return (x[:, 0] + x[:, 1]) / 2
-        x, x_dist = self.head(x[:, 0]), self.head_dist(x[:, 1])
+            return (x[:, :self.num_classes] + x[:, self.num_classes:2*self.num_classes]) / 2
+
+        if not self.multiclass:
+            x, x_dist = self.head(x[:, :self.num_classes]), self.head_dist(x[:, self.num_classes:self.num_classes * 2])
+        else:
+            all_results = []
+            all_results_dist = []
+            for i in range(self.num_classes):
+                all_results.append(self.head[i](x[:, i]))
+                all_results_dist.append(self.head_dist[i](x[:, i + self.num_classes]))
+            x = torch.cat(all_results, dim=1).reshape(-1, self.num_classes)
+            x_dist = torch.cat(all_results_dist, dim=1).reshape(-1, self.num_classes)
+
         if self.distilled_training and self.training and not torch.jit.is_scripting():
-            # only return separate classification predictions when training in distilled mode
             return x, x_dist
         else:
-            # during standard train / finetune, inference average the classifier predictions
             return (x + x_dist) / 2
 
 
