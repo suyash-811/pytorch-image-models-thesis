@@ -332,7 +332,7 @@ class VisionTransformer(nn.Module):
             self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, global_pool='token',
             embed_dim=768, depth=12, num_heads=12, mlp_ratio=4., qkv_bias=True, init_values=None,
             class_token=True, fc_norm=None, drop_rate=0., attn_drop_rate=0., drop_path_rate=0., weight_init='',
-            embed_layer=PatchEmbed, norm_layer=None, act_layer=None, block_fn=Block, multiclass=False):
+            embed_layer=PatchEmbed, norm_layer=None, act_layer=None, block_fn=Block, multiclass=False, return_attn_map=False):
         """
         Args:
             img_size (int, tuple): input image size
@@ -363,6 +363,7 @@ class VisionTransformer(nn.Module):
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         act_layer = act_layer or nn.GELU
 
+        self.return_attn_map = return_attn_map
         self.multiclass = multiclass
         self.num_classes = num_classes
         self.global_pool = global_pool
@@ -466,7 +467,10 @@ class VisionTransformer(nn.Module):
         x, attn = self.forward_features(x)
 
         x = self.forward_head(x)
-        return x, attn
+        if self.return_attn_map:
+            return x, attn
+        else:
+            return x
 
 
 def init_weights_vit_timm(module: nn.Module, name: str = ''):
